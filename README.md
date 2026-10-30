@@ -1,2 +1,2 @@
 # scipion
-Aut viam inveniam aut faciam
+*Aut viam inveniam aut faciam*
