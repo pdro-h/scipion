@@ -84,14 +84,16 @@ impl Searcher {
         if let Some(e) = self.tt.probe(key) {
             tt_move = e.mv;
             if ply > 0 && e.depth as i32 >= depth {
+                let score = score_from_tt(e.score, ply);
                 match e.flag {
-                    EXACT => return e.score,
-                    LOWER if e.score >= beta => return e.score,
-                    UPPER if e.score <= alpha => return e.score,
+                    EXACT => return score,
+                    LOWER if score >= beta => return score,
+                    UPPER if score <= alpha => return score,
                     _ => {}
                 }
             }
         }
+        
 
         let mut moves = legal_moves(b);
         if moves.is_empty() {
@@ -131,7 +133,7 @@ impl Searcher {
         } else {
             EXACT
         };
-        self.tt.store(key, depth, best, flag, best_mv);
+        self.tt.store(key, depth, score_to_tt(best, ply), flag, best_mv);
         best
     }
 
@@ -163,5 +165,55 @@ impl Searcher {
             }
         }
         best
+    }
+}
+
+/// Notas de mate acima disso são tratadas como "mate".
+const MATE_BOUND: i32 = MATE - 1000;
+
+/// Raiz -> TT: guarda o mate relativo ao nó, não à raiz.
+fn score_to_tt(score: i32, ply: i32) -> i32 {
+    if score > MATE_BOUND {
+        score + ply
+    } else if score < -MATE_BOUND {
+        score - ply
+    } else {
+        score
+    }
+}
+
+/// TT -> raiz: converte o mate de volta para o ply atual.
+fn score_from_tt(score: i32, ply: i32) -> i32 {
+    if score > MATE_BOUND {
+        score - ply
+    } else if score < -MATE_BOUND {
+        score + ply
+    } else {
+        score
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mate_score_adjusts_with_ply() {
+        // Nó no ply 3 acha mate no ply 5: nota MATE - 5.
+        let stored = score_to_tt(MATE - 5, 3);
+        assert_eq!(stored, MATE - 2); // 2 jogadas a partir do nó
+
+        // Lido em outro ply, a distância ao mate se ajusta.
+        assert_eq!(score_from_tt(stored, 1), MATE - 3);
+        assert_eq!(score_from_tt(stored, 3), MATE - 5);
+
+        // Mate contra: mesmo raciocínio, sinal invertido.
+        let stored = score_to_tt(-MATE + 5, 3);
+        assert_eq!(stored, -MATE + 2);
+        assert_eq!(score_from_tt(stored, 1), -MATE + 3);
+
+        // Notas normais não mudam.
+        assert_eq!(score_to_tt(150, 7), 150);
+        assert_eq!(score_from_tt(-40, 7), -40);
     }
 }
