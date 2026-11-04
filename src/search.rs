@@ -152,10 +152,17 @@ impl Searcher {
             if let Some(m) = self.iter_best {
                 best = m;
             }
+            let score_str = if s > MATE_BOUND {
+                format!("mate {}", (MATE - s + 1) / 2)
+            } else if s < -MATE_BOUND {
+                format!("mate -{}", (MATE + s + 1) / 2)
+            } else {
+                format!("cp {}", s)
+            };
             println!(
-                "info depth {} score cp {} nodes {} time {} pv {}",
+                "info depth {} score {} nodes {} time {} pv {}",
                 d,
-                s,
+                score_str,
                 self.nodes,
                 self.start.elapsed().as_millis(),
                 util::display_uci_move(b, best)
