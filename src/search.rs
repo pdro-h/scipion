@@ -256,4 +256,29 @@ mod tests {
             assert_eq!(s.is_draw(&b), i == 3, "falhou após o lance {}", m);
         }
     }
+
+    #[test]
+    fn mate_score_is_read_from_tt_at_a_different_ply() {
+        let p0 = Board::from_fen("4k3/8/8/8/8/8/R7/1R4K1 w - - 0 1", false).unwrap();
+        let mut q = p0.clone();
+        q.play_unchecked(util::parse_uci_move(&q, "a2a7").unwrap());
+
+        let mut warm = Searcher::new(1 << 16);
+        for reply in ["e8d8", "e8f8"] {
+            let mut p1 = q.clone();
+            p1.play_unchecked(util::parse_uci_move(&p1, reply).unwrap());
+            let mate_mv = util::parse_uci_move(&p1, "b1b8").unwrap();
+            warm.tt.store(p1.hash(), 10, MATE - 1, EXACT, Some(mate_mv));
+        }
+        warm.path = vec![q.hash()];
+        let s_warm = warm.negamax(&q, 4, 0, -INF, INF);
+
+        let mut cold = Searcher::new(1 << 16);
+        cold.path = vec![q.hash()];
+        let s_cold = cold.negamax(&q, 4, 0, -INF, INF);
+
+        assert!(warm.nodes < cold.nodes, "a TT não foi usada");
+        assert_eq!(s_cold, -MATE + 2);
+        assert_eq!(s_warm, s_cold);
+    }
 }
