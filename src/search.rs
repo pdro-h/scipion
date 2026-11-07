@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 pub const INF: i32 = 1_000_000;
 pub const MATE: i32 = 100_000;
+const MATE_BOUND: i32 = MATE - 1000;
 
 pub struct Searcher {
     tt: Tt,
@@ -14,6 +15,7 @@ pub struct Searcher {
     nodes: u64,
     stop: bool,
     iter_best: Option<Move>,
+    path: Vec<u64>,
 }
 
 impl Searcher {
@@ -25,6 +27,7 @@ impl Searcher {
             nodes: 0,
             stop: false,
             iter_best: None,
+            path: Vec::new(),
         }
     }
 
@@ -33,6 +36,17 @@ impl Searcher {
             self.stop = true;
         }
         self.stop
+    }
+
+    /// Pré-condição: o último elemento de `path` é o hash de `b`.
+    fn is_draw(&self, b: &Board) -> bool {
+        let hm = b.halfmove_clock() as usize;
+        if hm >= 100 {
+            return true;
+        }
+        let n = self.path.len();
+        let start = n.saturating_sub(1 + hm);
+        self.path[start..n - 1].contains(&b.hash())
     }
 
     fn qsearch(&mut self, b: &Board, mut alpha: i32, beta: i32) -> i32 {
@@ -73,7 +87,9 @@ impl Searcher {
         if self.time_up() {
             return 0;
         }
-        // extensão de xeque
+        if ply > 0 && self.is_draw(b) {
+            return 0;
+        }
         let depth = if b.checkers().is_empty() { depth } else { depth + 1 };
         if depth <= 0 {
             return self.qsearch(b, alpha, beta);
@@ -93,7 +109,6 @@ impl Searcher {
                 }
             }
         }
-        
 
         let mut moves = legal_moves(b);
         if moves.is_empty() {
@@ -107,7 +122,9 @@ impl Searcher {
         for m in moves {
             let mut nb = b.clone();
             nb.play_unchecked(m);
+            self.path.push(nb.hash());
             let s = -self.negamax(&nb, depth - 1, ply + 1, -beta, -alpha);
+            self.path.pop();
             if self.stop {
                 return 0;
             }
@@ -137,17 +154,20 @@ impl Searcher {
         best
     }
 
-    pub fn think(&mut self, b: &Board, max_depth: i32, limit: Duration) -> Move {
+    pub fn think(&mut self, b: &Board, history: &[u64], max_depth: i32, limit: Duration) -> Move {
         self.start = Instant::now();
         self.limit = limit;
         self.stop = false;
         self.nodes = 0;
+        self.path.clear();
+        self.path.extend_from_slice(history);
+        self.path.push(b.hash());
         let mut best = legal_moves(b)[0];
         for d in 1..=max_depth {
             self.iter_best = None;
             let s = self.negamax(b, d, 0, -INF, INF);
             if self.stop {
-                break; // descarta iteração incompleta
+                break;
             }
             if let Some(m) = self.iter_best {
                 best = m;
@@ -175,10 +195,6 @@ impl Searcher {
     }
 }
 
-/// Notas de mate acima disso são tratadas como "mate".
-const MATE_BOUND: i32 = MATE - 1000;
-
-/// Raiz -> TT: guarda o mate relativo ao nó, não à raiz.
 fn score_to_tt(score: i32, ply: i32) -> i32 {
     if score > MATE_BOUND {
         score + ply
@@ -189,7 +205,6 @@ fn score_to_tt(score: i32, ply: i32) -> i32 {
     }
 }
 
-/// TT -> raiz: converte o mate de volta para o ply atual.
 fn score_from_tt(score: i32, ply: i32) -> i32 {
     if score > MATE_BOUND {
         score - ply
@@ -206,21 +221,39 @@ mod tests {
 
     #[test]
     fn mate_score_adjusts_with_ply() {
-        // Nó no ply 3 acha mate no ply 5: nota MATE - 5.
         let stored = score_to_tt(MATE - 5, 3);
-        assert_eq!(stored, MATE - 2); // 2 jogadas a partir do nó
+        assert_eq!(stored, MATE - 2);
 
-        // Lido em outro ply, a distância ao mate se ajusta.
         assert_eq!(score_from_tt(stored, 1), MATE - 3);
         assert_eq!(score_from_tt(stored, 3), MATE - 5);
 
-        // Mate contra: mesmo raciocínio, sinal invertido.
         let stored = score_to_tt(-MATE + 5, 3);
         assert_eq!(stored, -MATE + 2);
         assert_eq!(score_from_tt(stored, 1), -MATE + 3);
 
-        // Notas normais não mudam.
         assert_eq!(score_to_tt(150, 7), 150);
         assert_eq!(score_from_tt(-40, 7), -40);
+    }
+
+    #[test]
+    fn repetition_and_fifty_move_are_draws() {
+        let mut s = Searcher::new(1 << 10);
+
+        let b = Board::from_fen("4k3/8/8/8/8/8/8/R3K3 w - - 100 80", false).unwrap();
+        s.path = vec![b.hash()];
+        assert!(s.is_draw(&b));
+
+        let b = Board::default();
+        s.path = vec![b.hash()];
+        assert!(!s.is_draw(&b));
+
+        let mut b = Board::default();
+        s.path = vec![b.hash()];
+        for (i, m) in ["g1f3", "g8f6", "f3g1", "f6g8"].iter().enumerate() {
+            let mv = util::parse_uci_move(&b, m).unwrap();
+            b.play_unchecked(mv);
+            s.path.push(b.hash());
+            assert_eq!(s.is_draw(&b), i == 3, "falhou após o lance {}", m);
+        }
     }
 }

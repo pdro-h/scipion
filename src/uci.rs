@@ -9,16 +9,13 @@ use crate::search::Searcher;
 const ENGINE_NAME: &str = "Scipion";
 const ENGINE_AUTHOR: &str = "pdro-h";
 
-/// Entradas da TT (não bytes). ~24 bytes cada => 1<<22 ≈ 100 MB.
+/// Número de entradas, não bytes.
 const TT_SIZE: usize = 1 << 22;
 
-/// Margem para latência de rede/GUI.
 const MOVE_OVERHEAD_MS: u64 = 30;
 
-/// Profundidade máxima quando o `go` não traz limite.
 const MAX_DEPTH: i32 = 64;
 
-/// Sem relógio, o think() ainda exige um Duration: 1 hora = "sem limite".
 const NO_TIME_LIMIT: Duration = Duration::from_secs(3600);
 
 #[derive(Default)]
@@ -31,7 +28,6 @@ struct GoParams {
     depth: Option<i32>,
 }
 
-/// Tempo negativo (bandeira caída) vira 0.
 fn next_ms<'a>(it: &mut impl Iterator<Item = &'a str>) -> Option<u64> {
     it.next()?.parse::<i64>().ok().map(|v| v.max(0) as u64)
 }
@@ -66,13 +62,12 @@ fn time_budget(board: &Board, p: &GoParams) -> Duration {
 
     let Some(time) = time else { return NO_TIME_LIMIT };
 
-    // t/30 + inc/2, limitado ao relógio menos a margem.
     let budget = time / 30 + inc / 2;
     let hard_cap = time.saturating_sub(MOVE_OVERHEAD_MS);
     Duration::from_millis(budget.min(hard_cap).max(1))
 }
 
-fn parse_position(args: &[&str]) -> Option<Board> {
+fn parse_position(args: &[&str]) -> Option<(Board, Vec<u64>)> {
     let (setup, moves) = match args.iter().position(|&t| t == "moves") {
         Some(i) => (&args[..i], &args[i + 1..]),
         None => (args, &args[args.len()..]),
@@ -84,18 +79,23 @@ fn parse_position(args: &[&str]) -> Option<Board> {
         _ => return None,
     };
 
+    let mut history = Vec::new();
+
     for m in moves {
         let mv = util::parse_uci_move(&board, m).ok()?;
         if !board.is_legal(mv) {
             return None;
         }
+        // O hash entra antes do lance: a posição atual não pode constar no histórico.
+        history.push(board.hash());
         board.play_unchecked(mv);
     }
-    Some(board)
+    Some((board, history))
 }
 
 pub fn run() {
     let mut board = Board::default();
+    let mut history: Vec<u64> = Vec::new();
     let mut searcher = Searcher::new(TT_SIZE);
 
     for line in io::stdin().lock().lines() {
@@ -112,11 +112,13 @@ pub fn run() {
             "isready" => println!("readyok"),
             "ucinewgame" => {
                 board = Board::default();
+                history.clear();
                 searcher = Searcher::new(TT_SIZE);
             }
             "position" => {
-                if let Some(b) = parse_position(args) {
+                if let Some((b, h)) = parse_position(args) {
                     board = b;
+                    history = h;
                 }
             }
             "go" => {
@@ -127,7 +129,7 @@ pub fn run() {
                 let p = parse_go(args);
                 let depth = p.depth.unwrap_or(MAX_DEPTH);
                 let limit = time_budget(&board, &p);
-                let mv = searcher.think(&board, depth, limit);
+                let mv = searcher.think(&board, &history, depth, limit);
                 println!("bestmove {}", util::display_uci_move(&board, mv));
             }
             "quit" => break,
